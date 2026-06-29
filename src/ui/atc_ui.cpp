@@ -153,6 +153,17 @@ static bool openai_base_url_buf_initialized = false;
 static float openai_base_url_feedback_timer = 0.0f;
 static char openai_base_url_feedback_msg[128] = {};
 
+// Free-text model name buffers, used in place of the catalog combos
+// when a custom OpenAI-compatible base URL is configured. Ollama / LM
+// Studio / vLLM hosts can serve any model id (e.g. "llama3.2:latest",
+// "qwen2.5:7b"), so the catalog dropdown is replaced by an InputText
+// that round-trips through settings::set_openai_*_model(). Lazy-init
+// on first render so the user's saved value is visible.
+static char openai_stt_model_buf[128] = {};
+static char openai_lm_model_buf[128] = {};
+static char openai_tts_model_buf[128] = {};
+static bool openai_model_bufs_initialized = false;
+
 static char mistral_key_buf[256] = {};
 static float mistral_key_feedback_timer = 0.0f;
 static char mistral_key_feedback_msg[128] = {};
@@ -1443,20 +1454,71 @@ static void draw_settings_tab() {
       openai_base_url_feedback_timer -= ImGui::GetIO().DeltaTime;
     }
 
-    // Model + voice combos — driven by data/models_catalog.json so
-    // the user can add new slugs without recompiling.
-    combo_from_catalog(
-        ui_strings::tr("settings.stt_model"),
-        models_catalog::openai_stt_options(), settings::openai_stt_model(),
-        [](const std::string &v) { settings::set_openai_stt_model(v); });
-    combo_from_catalog(
-        ui_strings::tr("settings.lm_model"),
-        models_catalog::openai_lm_options(), settings::openai_lm_model(),
-        [](const std::string &v) { settings::set_openai_lm_model(v); });
-    combo_from_catalog(
-        ui_strings::tr("settings.tts_model"),
-        models_catalog::openai_tts_options(), settings::openai_tts_model(),
-        [](const std::string &v) { settings::set_openai_tts_model(v); });
+    // Model selectors. With the default OpenAI endpoint we use the
+    // catalog-driven combo (curated list of known slugs). With a
+    // custom base URL the server may serve any model id (Ollama
+    // "llama3.2:latest", LM Studio local paths, etc.), so we drop to
+    // a free-text InputText that persists on Enter or focus-loss.
+    const bool custom_endpoint = !settings::openai_base_url().empty();
+    if (custom_endpoint) {
+      if (!openai_model_bufs_initialized) {
+        const std::string s_cur = settings::openai_stt_model();
+        const std::string l_cur = settings::openai_lm_model();
+        const std::string t_cur = settings::openai_tts_model();
+        std::strncpy(openai_stt_model_buf, s_cur.c_str(),
+                     sizeof(openai_stt_model_buf) - 1);
+        openai_stt_model_buf[sizeof(openai_stt_model_buf) - 1] = '\0';
+        std::strncpy(openai_lm_model_buf, l_cur.c_str(),
+                     sizeof(openai_lm_model_buf) - 1);
+        openai_lm_model_buf[sizeof(openai_lm_model_buf) - 1] = '\0';
+        std::strncpy(openai_tts_model_buf, t_cur.c_str(),
+                     sizeof(openai_tts_model_buf) - 1);
+        openai_tts_model_buf[sizeof(openai_tts_model_buf) - 1] = '\0';
+        openai_model_bufs_initialized = true;
+      }
+      auto text_model_field =
+          [](const char *label, char *buf, size_t buf_size,
+             const std::function<void(const std::string &)> &on_change) {
+            const bool entered = ImGui::InputText(
+                label, buf, buf_size, ImGuiInputTextFlags_EnterReturnsTrue);
+            const bool deactivated = ImGui::IsItemDeactivatedAfterEdit();
+            if (entered || deactivated)
+              on_change(std::string(buf));
+          };
+      text_model_field(ui_strings::tr("settings.stt_model"),
+                       openai_stt_model_buf, sizeof(openai_stt_model_buf),
+                       [](const std::string &v) {
+                         settings::set_openai_stt_model(v);
+                       });
+      text_model_field(ui_strings::tr("settings.lm_model"),
+                       openai_lm_model_buf, sizeof(openai_lm_model_buf),
+                       [](const std::string &v) {
+                         settings::set_openai_lm_model(v);
+                       });
+      text_model_field(ui_strings::tr("settings.tts_model"),
+                       openai_tts_model_buf, sizeof(openai_tts_model_buf),
+                       [](const std::string &v) {
+                         settings::set_openai_tts_model(v);
+                       });
+      ImGui::TextDisabled("Custom endpoint: type any model id (e.g. "
+                          "llama3.2:latest for Ollama).");
+    } else {
+      // Default OpenAI: catalog-driven combo so the user picks from
+      // known-good slugs.
+      openai_model_bufs_initialized = false;
+      combo_from_catalog(
+          ui_strings::tr("settings.stt_model"),
+          models_catalog::openai_stt_options(), settings::openai_stt_model(),
+          [](const std::string &v) { settings::set_openai_stt_model(v); });
+      combo_from_catalog(
+          ui_strings::tr("settings.lm_model"),
+          models_catalog::openai_lm_options(), settings::openai_lm_model(),
+          [](const std::string &v) { settings::set_openai_lm_model(v); });
+      combo_from_catalog(
+          ui_strings::tr("settings.tts_model"),
+          models_catalog::openai_tts_options(), settings::openai_tts_model(),
+          [](const std::string &v) { settings::set_openai_tts_model(v); });
+    }
 
     combo_from_catalog(
         ui_strings::tr("settings.atis_voice"),
