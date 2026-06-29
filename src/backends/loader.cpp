@@ -71,8 +71,10 @@ void update_state(const model_manifest::Entry &entry, FileState s,
                   std::string message = {}) {
   std::lock_guard<std::mutex> lk(g_mtx);
   for (auto &f : g_status.files) {
-    if (f.kind == entry.kind && f.voice_id == entry.voice_id &&
-        f.language == entry.language) {
+    // Match by filename — the only field guaranteed unique across the
+    // manifest. (kind, voice_id, language) alone collides when the
+    // catalog exposes multiple Whisper variants for one language.
+    if (f.filename == entry.filename) {
       f.state = s;
       f.message = std::move(message);
       return;
@@ -88,8 +90,8 @@ void seed_status_locked() {
   if (!g_status.files.empty())
     return;
   for (const auto &e : model_manifest::all()) {
-    g_status.files.push_back(
-        {e.kind, e.voice_id, e.language, FileState::NotChecked, {}});
+    g_status.files.push_back({e.kind, e.voice_id, e.language, e.filename,
+                              FileState::NotChecked, {}});
   }
 }
 
@@ -237,8 +239,7 @@ bool verify_files() {
       // Inspect the freshly written state for the summary tally.
       std::lock_guard<std::mutex> lk(g_mtx);
       for (const auto &f : g_status.files) {
-        if (f.kind == e.kind && f.voice_id == e.voice_id &&
-            f.language == e.language) {
+        if (f.filename == e.filename) {
           switch (f.state) {
           case FileState::Missing:
             ++missing_count;
@@ -744,8 +745,7 @@ std::vector<ReadinessBlocker> Status::readiness_blockers() const {
   // it ad-hoc per row.
   auto label_for = [](const FileStatus &f) {
     for (const auto &e : model_manifest::all()) {
-      if (e.kind == f.kind && e.voice_id == f.voice_id &&
-          e.language == f.language)
+      if (e.filename == f.filename)
         return e.display_name;
     }
     // Fallback — should not happen because Status.files mirrors
@@ -824,13 +824,12 @@ void start() {
     // is still registered so a re-run after a download doesn't
     // spuriously reload the others.
     for (auto &f : g_status.files) {
-      // Find the corresponding manifest entry to feed entry_loaded.
-      // Three-way key (kind, voice_id, language) — two Whisper rows
-      // share the same kind/voice_id but differ by language.
+      // Match the manifest entry by filename (the only uniquely-
+      // identifying field; (kind, voice_id, language) alone collides
+      // across multiple Whisper variants for one language).
       const model_manifest::Entry *e = nullptr;
       for (const auto &cand : model_manifest::all()) {
-        if (cand.kind == f.kind && cand.voice_id == f.voice_id &&
-            cand.language == f.language) {
+        if (cand.filename == f.filename) {
           e = &cand;
           break;
         }
@@ -890,24 +889,30 @@ void clear_file_state(const std::string &single_entry_key) {
   }
   if (!target)
     return;
-  auto reset = [](model_manifest::Kind k, const std::string &voice_id,
-                  const std::string &lang) {
+  auto reset_by_filename = [](const std::string &filename) {
     std::lock_guard<std::mutex> lk(g_mtx);
     for (auto &f : g_status.files) {
-      if (f.kind == k && f.voice_id == voice_id && f.language == lang) {
+      if (f.filename == filename) {
         f.state = FileState::NotChecked;
         f.message.clear();
         return;
       }
     }
   };
-  reset(target->kind, target->voice_id, target->language);
+  reset_by_filename(target->filename);
 #ifdef XPWELLYS_USE_LOCAL_INFERENCE
   using K = model_manifest::Kind;
   if (target->kind == K::PiperVoice || target->kind == K::PiperVoiceConfig) {
     const K sibling =
         (target->kind == K::PiperVoice) ? K::PiperVoiceConfig : K::PiperVoice;
-    reset(sibling, target->voice_id, target->language);
+    // Find the sibling's filename to reset it too.
+    for (const auto &cand : model_manifest::all()) {
+      if (cand.kind == sibling && cand.voice_id == target->voice_id &&
+          cand.language == target->language) {
+        reset_by_filename(cand.filename);
+        break;
+      }
+    }
     // Unload from Piper so it is not still ready in memory after the
     // file disappears from disk.
     if (g_piper)

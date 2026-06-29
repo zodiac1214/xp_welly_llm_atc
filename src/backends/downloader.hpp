@@ -28,12 +28,16 @@ enum class State {
 };
 
 struct Progress {
-  // (kind, voice_id, language) jointly identify the manifest entry.
+  // (kind, voice_id, filename) jointly identify the manifest entry.
   // voice_id is empty for Whisper/Llama; language is empty for
-  // language-agnostic entries (Llama).
+  // language-agnostic entries (Llama). filename is the only field
+  // guaranteed unique — required because the catalog can expose
+  // multiple Whisper variants for the same (kind, voice_id, language)
+  // triple.
   model_manifest::Kind kind;
   std::string voice_id;
   std::string language;
+  std::string filename;
   State state = State::Idle;
   // Total expected size and bytes already on disk (.part + already-
   // resumed). The UI feeds these directly into a progress bar.

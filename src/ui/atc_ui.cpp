@@ -868,14 +868,13 @@ static void draw_models_tab() {
       continue; // user has the section folded away
     }
     backends::loader::FileStatus loader_fs{
-        m.kind, m.voice_id, m.language, backends::loader::FileState::NotChecked,
-        ""};
+        m.kind,    m.voice_id, m.language, m.filename,
+        backends::loader::FileState::NotChecked, ""};
     for (const auto &fs : loader_status.files) {
-      // Match on the full (kind, voice_id, language) triple — two
-      // Whisper rows share the same kind/voice_id but differ by
-      // language.
-      if (fs.kind == m.kind && fs.voice_id == m.voice_id &&
-          fs.language == m.language) {
+      // Match by filename — uniquely identifies each manifest entry
+      // even when multiple Whisper variants share (kind, voice_id,
+      // language).
+      if (fs.filename == m.filename) {
         loader_fs = fs;
         break;
       }
@@ -883,10 +882,11 @@ static void draw_models_tab() {
     backends::downloader::Progress dl{};
     dl.kind = m.kind;
     dl.voice_id = m.voice_id;
+    dl.language = m.language;
+    dl.filename = m.filename;
     // Downloader Progress vector mirrors model_manifest::all() order
     // exactly, so the same index `i` is the authoritative lookup.
-    if (i < downloads.size() && downloads[i].kind == m.kind &&
-        downloads[i].voice_id == m.voice_id) {
+    if (i < downloads.size() && downloads[i].filename == m.filename) {
       dl = downloads[i];
     }
 
