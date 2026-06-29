@@ -69,8 +69,8 @@ void seed_progress_locked() {
   if (!g_progress.empty())
     return;
   for (const auto &e : model_manifest::all()) {
-    g_progress.push_back(
-        {e.kind, e.voice_id, e.language, State::Idle, e.size_bytes, 0, {}});
+    g_progress.push_back({e.kind, e.voice_id, e.language, e.filename,
+                          State::Idle, e.size_bytes, 0, {}});
   }
 }
 
@@ -81,6 +81,7 @@ int find_index_locked(const std::string &key) {
     tmp.kind = p.kind;
     tmp.voice_id = p.voice_id;
     tmp.language = p.language;
+    tmp.filename = p.filename;
     if (model_manifest::entry_key(tmp) == key)
       return static_cast<int>(i);
   }
@@ -230,16 +231,46 @@ bool download_one(const model_manifest::Entry &e) {
     return false;
   }
 
+  // If we asked the server to resume (Range: bytes=N-) but it replied
+  // 200 OK instead of 206 Partial Content, libcurl wrote the entire
+  // file starting at the current append-mode offset N. The .part now
+  // contains [N bytes of old partial data][full file]. Detect this and
+  // start fresh on the next attempt — otherwise the size grows
+  // monotonically and every "Download again" click makes it worse.
+  if (resume_from > 0 && http_code == 200) {
+    std::error_code rmec;
+    fs::remove(part_path, rmec);
+    set_state(key, State::Failed,
+              "Server ignored resume request (responded 200 instead of 206); "
+              "discarded partial file. Click Download again to start fresh.",
+              0);
+    return false;
+  }
+
   uint64_t got = file_size(part_path);
   if (got != e.size_bytes) {
-    char msg[160];
-    std::snprintf(
-        msg, sizeof(msg),
-        "Wrong size after download (got %llu, expected %llu) - partial "
-        "transfer; click Download again to resume.",
-        static_cast<unsigned long long>(got),
-        static_cast<unsigned long long>(e.size_bytes));
-    set_state(key, State::Failed, msg, got);
+    char msg[200];
+    if (got > e.size_bytes) {
+      // Oversize file: corrupt resume or append-mode overrun. Drop the
+      // .part so the next attempt starts clean rather than compounding.
+      std::error_code rmec;
+      fs::remove(part_path, rmec);
+      std::snprintf(
+          msg, sizeof(msg),
+          "Downloaded file is larger than expected (got %llu, expected %llu) "
+          "- discarded partial file. Click Download again to start fresh.",
+          static_cast<unsigned long long>(got),
+          static_cast<unsigned long long>(e.size_bytes));
+      set_state(key, State::Failed, msg, 0);
+    } else {
+      std::snprintf(
+          msg, sizeof(msg),
+          "Wrong size after download (got %llu, expected %llu) - partial "
+          "transfer; click Download again to resume.",
+          static_cast<unsigned long long>(got),
+          static_cast<unsigned long long>(e.size_bytes));
+      set_state(key, State::Failed, msg, got);
+    }
     return false;
   }
 
@@ -406,6 +437,7 @@ void enqueue(const model_manifest::Entry &entry) {
       tmp.kind = ap.kind;
       tmp.voice_id = ap.voice_id;
       tmp.language = ap.language;
+      tmp.filename = ap.filename;
       if (model_manifest::entry_key(tmp) == key)
         return;
     }
@@ -443,11 +475,11 @@ size_t enqueue_all_missing(bool include_all_languages) {
     if (!include_all_languages && !fs.language.empty() &&
         fs.language != active_lang)
       continue;
-    // Match on (kind, voice_id, language) — two Whisper entries share
-    // the same kind/voice_id but differ by language.
+    // Match by filename — the only uniquely-identifying field. Earlier
+    // versions matched on (kind, voice_id, language) which collided
+    // across Whisper variants for one language.
     for (const auto &e : model_manifest::all()) {
-      if (e.kind == fs.kind && e.voice_id == fs.voice_id &&
-          e.language == fs.language) {
+      if (e.filename == fs.filename) {
         if (e.optional) {
           // Optional Piper voice: only enqueue when the user picked
           // it for a role. Unassigned optional voices still need an
@@ -490,6 +522,8 @@ void cancel(const model_manifest::Entry &entry) {
       model_manifest::Entry tmp{};
       tmp.kind = ap.kind;
       tmp.voice_id = ap.voice_id;
+      tmp.language = ap.language;
+      tmp.filename = ap.filename;
       if (model_manifest::entry_key(tmp) == key)
         was_active = true;
     }

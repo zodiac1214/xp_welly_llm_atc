@@ -36,6 +36,12 @@ struct FileStatus {
   // language-agnostic entries (Llama). Lets all_ready() skip the
   // wrong-language Whisper/voice rows.
   std::string language;
+  // On-disk filename of this entry. Required for uniqueness: the
+  // catalog may expose multiple Whisper/Llama files that share the
+  // same (kind, voice_id, language) triple (e.g. small.en-q5_1 +
+  // small.en-q8_0). Matching rows by filename keeps each variant's
+  // state independent.
+  std::string filename;
   FileState state = FileState::NotChecked;
   // Last error / informational message — surfaced verbatim by the UI.
   std::string message;

@@ -125,14 +125,19 @@ bool role_from_name(const std::string &name, VoiceRole &out) {
 }
 
 std::string entry_key(const Entry &e) {
-  // Append the language tag for kinds that can have multiple
-  // language-specific variants. Piper entries carry their language
-  // implicitly via voice_id; Llama is language-agnostic.
+  // Must be globally unique across the manifest. A previous version
+  // keyed Whisper by language alone, which collided when the catalog
+  // exposed multiple Whisper variants for the same language (e.g.
+  // small.en-q5_1 + small.en-q8_0 + base.en-atc all "en"). The
+  // collision made find_entry_by_key() / find_index_locked() return
+  // the wrong entry and crossed the Download/Verify wires across
+  // files. Filenames are unique on disk by construction, so use them
+  // as the disambiguator.
   switch (e.kind) {
   case Kind::WhisperModel:
-    return std::string("whisper:") + (e.language.empty() ? "any" : e.language);
+    return "whisper:" + e.filename;
   case Kind::LlamaModel:
-    return "llama";
+    return "llama:" + e.filename;
   case Kind::PiperVoice:
     return "voice:" + e.voice_id + ":onnx";
   case Kind::PiperVoiceConfig:

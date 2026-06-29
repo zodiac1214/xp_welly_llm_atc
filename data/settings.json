@@ -12,6 +12,7 @@
   "start_mode": "engines_running",
   "backend_mode": "local",
   "api_key_saved": false,
+  "openai_base_url": "",
   "openai_stt_model": "whisper-1",
   "openai_lm_model": "gpt-4o-mini",
   "openai_tts_model": "tts-1",

@@ -64,6 +64,13 @@ static json default_config() {
       {"start_mode", "engines_running"},
       {"backend_mode", "local"},
       {"api_key_saved", false},
+      // Empty string => use the OpenAI default endpoint
+      // (https://api.openai.com). Setting any other URL routes the
+      // three OpenAI-compatible clients (Whisper/Chat/TTS) at that
+      // base — e.g. Ollama, LM Studio, or any other OpenAI-API-
+      // compatible server. The api_key may be empty for servers that
+      // don't require one (Ollama default).
+      {"openai_base_url", ""},
       {"openai_stt_model", "whisper-1"},
       {"openai_lm_model", "gpt-4o-mini"},
       {"openai_tts_model", "tts-1"},
@@ -347,6 +354,9 @@ std::string openai_lm_model() {
 std::string openai_tts_model() {
   return cfg.value("openai_tts_model", std::string("tts-1"));
 }
+std::string openai_base_url() {
+  return cfg.value("openai_base_url", std::string(""));
+}
 
 namespace {
 bool is_valid_openai_voice(const std::string &v) {
@@ -467,6 +477,13 @@ void set_backend_mode(const std::string &v) {
 void set_openai_stt_model(const std::string &v) { cfg["openai_stt_model"] = v; }
 void set_openai_lm_model(const std::string &v) { cfg["openai_lm_model"] = v; }
 void set_openai_tts_model(const std::string &v) { cfg["openai_tts_model"] = v; }
+void set_openai_base_url(const std::string &v) {
+  // Trim trailing slashes so callers can concatenate "/v1/...".
+  std::string trimmed = v;
+  while (!trimmed.empty() && trimmed.back() == '/')
+    trimmed.pop_back();
+  cfg["openai_base_url"] = trimmed;
+}
 void set_openai_tts_voice_atis(const std::string &v) {
   if (is_valid_openai_voice(v))
     cfg["openai_tts_voice_atis"] = v;

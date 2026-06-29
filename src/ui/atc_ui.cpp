@@ -145,6 +145,25 @@ static char api_key_buf[256] = {};
 static float api_key_feedback_timer = 0.0f;
 static char api_key_feedback_msg[128] = {};
 
+// OpenAI-compatible base URL buffer. Empty => default api.openai.com.
+// Initialized from settings on first render so the user sees their
+// existing value.
+static char openai_base_url_buf[256] = {};
+static bool openai_base_url_buf_initialized = false;
+static float openai_base_url_feedback_timer = 0.0f;
+static char openai_base_url_feedback_msg[128] = {};
+
+// Free-text model name buffers, used in place of the catalog combos
+// when a custom OpenAI-compatible base URL is configured. Ollama / LM
+// Studio / vLLM hosts can serve any model id (e.g. "llama3.2:latest",
+// "qwen2.5:7b"), so the catalog dropdown is replaced by an InputText
+// that round-trips through settings::set_openai_*_model(). Lazy-init
+// on first render so the user's saved value is visible.
+static char openai_stt_model_buf[128] = {};
+static char openai_lm_model_buf[128] = {};
+static char openai_tts_model_buf[128] = {};
+static bool openai_model_bufs_initialized = false;
+
 static char mistral_key_buf[256] = {};
 static float mistral_key_feedback_timer = 0.0f;
 static char mistral_key_feedback_msg[128] = {};
@@ -849,14 +868,13 @@ static void draw_models_tab() {
       continue; // user has the section folded away
     }
     backends::loader::FileStatus loader_fs{
-        m.kind, m.voice_id, m.language, backends::loader::FileState::NotChecked,
-        ""};
+        m.kind,    m.voice_id, m.language, m.filename,
+        backends::loader::FileState::NotChecked, ""};
     for (const auto &fs : loader_status.files) {
-      // Match on the full (kind, voice_id, language) triple — two
-      // Whisper rows share the same kind/voice_id but differ by
-      // language.
-      if (fs.kind == m.kind && fs.voice_id == m.voice_id &&
-          fs.language == m.language) {
+      // Match by filename — uniquely identifies each manifest entry
+      // even when multiple Whisper variants share (kind, voice_id,
+      // language).
+      if (fs.filename == m.filename) {
         loader_fs = fs;
         break;
       }
@@ -864,10 +882,11 @@ static void draw_models_tab() {
     backends::downloader::Progress dl{};
     dl.kind = m.kind;
     dl.voice_id = m.voice_id;
+    dl.language = m.language;
+    dl.filename = m.filename;
     // Downloader Progress vector mirrors model_manifest::all() order
     // exactly, so the same index `i` is the authoritative lookup.
-    if (i < downloads.size() && downloads[i].kind == m.kind &&
-        downloads[i].voice_id == m.voice_id) {
+    if (i < downloads.size() && downloads[i].filename == m.filename) {
       dl = downloads[i];
     }
 
@@ -1377,20 +1396,129 @@ static void draw_settings_tab() {
       api_key_feedback_timer -= ImGui::GetIO().DeltaTime;
     }
 
-    // Model + voice combos — driven by data/models_catalog.json so
-    // the user can add new slugs without recompiling.
-    combo_from_catalog(
-        ui_strings::tr("settings.stt_model"),
-        models_catalog::openai_stt_options(), settings::openai_stt_model(),
-        [](const std::string &v) { settings::set_openai_stt_model(v); });
-    combo_from_catalog(
-        ui_strings::tr("settings.lm_model"),
-        models_catalog::openai_lm_options(), settings::openai_lm_model(),
-        [](const std::string &v) { settings::set_openai_lm_model(v); });
-    combo_from_catalog(
-        ui_strings::tr("settings.tts_model"),
-        models_catalog::openai_tts_options(), settings::openai_tts_model(),
-        [](const std::string &v) { settings::set_openai_tts_model(v); });
+    // OpenAI-compatible base URL. Empty => default OpenAI endpoint.
+    // Set this to point at Ollama / LM Studio / any other server that
+    // exposes the OpenAI /v1/* API. When set, the API key may also be
+    // empty (Ollama by default does not require auth).
+    if (!openai_base_url_buf_initialized) {
+      const std::string cur = settings::openai_base_url();
+      std::strncpy(openai_base_url_buf, cur.c_str(),
+                   sizeof(openai_base_url_buf) - 1);
+      openai_base_url_buf[sizeof(openai_base_url_buf) - 1] = '\0';
+      openai_base_url_buf_initialized = true;
+    }
+    ImGui::InputText("Base URL", openai_base_url_buf,
+                     sizeof(openai_base_url_buf));
+    ImGui::TextDisabled("Empty = api.openai.com. Example: "
+                        "http://localhost:11434 (Ollama).");
+    if (ImGui::Button("Paste URL")) {
+      std::string clip = ui::clipboard::read_system_text();
+      if (!clip.empty()) {
+        std::strncpy(openai_base_url_buf, clip.c_str(),
+                     sizeof(openai_base_url_buf) - 1);
+        openai_base_url_buf[sizeof(openai_base_url_buf) - 1] = '\0';
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save URL")) {
+      settings::set_openai_base_url(openai_base_url_buf);
+      settings::save();
+      // Re-read to reflect any trim done by the setter.
+      const std::string saved = settings::openai_base_url();
+      std::strncpy(openai_base_url_buf, saved.c_str(),
+                   sizeof(openai_base_url_buf) - 1);
+      openai_base_url_buf[sizeof(openai_base_url_buf) - 1] = '\0';
+      std::snprintf(openai_base_url_feedback_msg,
+                    sizeof(openai_base_url_feedback_msg), "%s",
+                    saved.empty() ? "Cleared (using api.openai.com)"
+                                  : "Base URL saved");
+      openai_base_url_feedback_timer = 3.0f;
+      backends::loader::stop();
+      backends::loader::start();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset URL")) {
+      std::memset(openai_base_url_buf, 0, sizeof(openai_base_url_buf));
+      settings::set_openai_base_url("");
+      settings::save();
+      std::snprintf(openai_base_url_feedback_msg,
+                    sizeof(openai_base_url_feedback_msg), "%s",
+                    "Reset to default (api.openai.com)");
+      openai_base_url_feedback_timer = 3.0f;
+      backends::loader::stop();
+      backends::loader::start();
+    }
+    if (openai_base_url_feedback_timer > 0.0f) {
+      ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s",
+                         openai_base_url_feedback_msg);
+      openai_base_url_feedback_timer -= ImGui::GetIO().DeltaTime;
+    }
+
+    // Model selectors. With the default OpenAI endpoint we use the
+    // catalog-driven combo (curated list of known slugs). With a
+    // custom base URL the server may serve any model id (Ollama
+    // "llama3.2:latest", LM Studio local paths, etc.), so we drop to
+    // a free-text InputText that persists on Enter or focus-loss.
+    const bool custom_endpoint = !settings::openai_base_url().empty();
+    if (custom_endpoint) {
+      if (!openai_model_bufs_initialized) {
+        const std::string s_cur = settings::openai_stt_model();
+        const std::string l_cur = settings::openai_lm_model();
+        const std::string t_cur = settings::openai_tts_model();
+        std::strncpy(openai_stt_model_buf, s_cur.c_str(),
+                     sizeof(openai_stt_model_buf) - 1);
+        openai_stt_model_buf[sizeof(openai_stt_model_buf) - 1] = '\0';
+        std::strncpy(openai_lm_model_buf, l_cur.c_str(),
+                     sizeof(openai_lm_model_buf) - 1);
+        openai_lm_model_buf[sizeof(openai_lm_model_buf) - 1] = '\0';
+        std::strncpy(openai_tts_model_buf, t_cur.c_str(),
+                     sizeof(openai_tts_model_buf) - 1);
+        openai_tts_model_buf[sizeof(openai_tts_model_buf) - 1] = '\0';
+        openai_model_bufs_initialized = true;
+      }
+      auto text_model_field =
+          [](const char *label, char *buf, size_t buf_size,
+             const std::function<void(const std::string &)> &on_change) {
+            const bool entered = ImGui::InputText(
+                label, buf, buf_size, ImGuiInputTextFlags_EnterReturnsTrue);
+            const bool deactivated = ImGui::IsItemDeactivatedAfterEdit();
+            if (entered || deactivated)
+              on_change(std::string(buf));
+          };
+      text_model_field(ui_strings::tr("settings.stt_model"),
+                       openai_stt_model_buf, sizeof(openai_stt_model_buf),
+                       [](const std::string &v) {
+                         settings::set_openai_stt_model(v);
+                       });
+      text_model_field(ui_strings::tr("settings.lm_model"),
+                       openai_lm_model_buf, sizeof(openai_lm_model_buf),
+                       [](const std::string &v) {
+                         settings::set_openai_lm_model(v);
+                       });
+      text_model_field(ui_strings::tr("settings.tts_model"),
+                       openai_tts_model_buf, sizeof(openai_tts_model_buf),
+                       [](const std::string &v) {
+                         settings::set_openai_tts_model(v);
+                       });
+      ImGui::TextDisabled("Custom endpoint: type any model id (e.g. "
+                          "llama3.2:latest for Ollama).");
+    } else {
+      // Default OpenAI: catalog-driven combo so the user picks from
+      // known-good slugs.
+      openai_model_bufs_initialized = false;
+      combo_from_catalog(
+          ui_strings::tr("settings.stt_model"),
+          models_catalog::openai_stt_options(), settings::openai_stt_model(),
+          [](const std::string &v) { settings::set_openai_stt_model(v); });
+      combo_from_catalog(
+          ui_strings::tr("settings.lm_model"),
+          models_catalog::openai_lm_options(), settings::openai_lm_model(),
+          [](const std::string &v) { settings::set_openai_lm_model(v); });
+      combo_from_catalog(
+          ui_strings::tr("settings.tts_model"),
+          models_catalog::openai_tts_options(), settings::openai_tts_model(),
+          [](const std::string &v) { settings::set_openai_tts_model(v); });
+    }
 
     combo_from_catalog(
         ui_strings::tr("settings.atis_voice"),

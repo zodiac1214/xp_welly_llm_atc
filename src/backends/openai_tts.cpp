@@ -84,11 +84,9 @@ std::vector<int16_t> OpenAiTts::synthesize(const std::string &voice_id,
                                            uint32_t &sample_rate_hz) {
   sample_rate_hz = 0;
   last_error_.clear();
-  if (api_key_.empty()) {
-    logging::error("[%s] No API key configured", kBackendTag);
-    last_error_ = std::string(kBackendTag) + ": No API key configured";
-    return {};
-  }
+  // An empty api_key is allowed: OpenAI-compatible servers (e.g.
+  // Ollama, LM Studio) often don't require auth. We just skip the
+  // Authorization header below in that case.
   if (!is_valid_openai_voice(voice_id)) {
     logging::error("[%s] Unknown OpenAI voice id: %s", kBackendTag,
                    voice_id.c_str());
@@ -103,11 +101,12 @@ std::vector<int16_t> OpenAiTts::synthesize(const std::string &voice_id,
   const float raw_speed = (length_scale > 0.0f) ? (1.0f / length_scale) : 1.0f;
   const float speed = std::max(0.25f, std::min(4.0f, raw_speed));
 
-  const std::string key_tail = openai_common::last4(api_key_);
-  logging::info("[%s] POST /v1/audio/speech, voice %s, %zu chars, speed %.2f, "
-                "key sk-...%s",
-                kBackendTag, voice_id.c_str(), text.size(), speed,
-                key_tail.c_str());
+  const std::string key_tail =
+      api_key_.empty() ? std::string("none") : openai_common::last4(api_key_);
+  logging::info("[%s] POST %s/v1/audio/speech, voice %s, %zu chars, "
+                "speed %.2f, key sk-...%s",
+                kBackendTag, base_url_.c_str(), voice_id.c_str(), text.size(),
+                speed, key_tail.c_str());
 
   nlohmann::json body = {
       {"model", model_},          {"input", text},
@@ -124,8 +123,11 @@ std::vector<int16_t> OpenAiTts::synthesize(const std::string &voice_id,
   }
 
   const std::string url = base_url_ + "/v1/audio/speech";
-  const std::string auth = "Authorization: Bearer " + api_key_;
-  struct curl_slist *headers = curl_slist_append(nullptr, auth.c_str());
+  struct curl_slist *headers = nullptr;
+  if (!api_key_.empty()) {
+    const std::string auth = "Authorization: Bearer " + api_key_;
+    headers = curl_slist_append(headers, auth.c_str());
+  }
   headers = curl_slist_append(headers, "Content-Type: application/json");
 
   std::vector<uint8_t> wav_bytes;
