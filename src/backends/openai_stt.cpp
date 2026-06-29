@@ -38,11 +38,9 @@ OpenAiStt::OpenAiStt(std::string api_key, std::string model,
 std::string OpenAiStt::transcribe(const std::vector<float> &pcm_16k_mono,
                                   const std::string &airport_context) {
   last_error_.clear();
-  if (api_key_.empty()) {
-    logging::error("[%s] No API key configured", kBackendTag);
-    last_error_ = std::string(kBackendTag) + ": No API key configured";
-    return {};
-  }
+  // An empty api_key is allowed: OpenAI-compatible servers (e.g.
+  // Ollama, LM Studio) often don't require auth. We just skip the
+  // Authorization header below in that case.
   if (pcm_16k_mono.empty())
     return {};
 
@@ -56,11 +54,12 @@ std::string OpenAiStt::transcribe(const std::vector<float> &pcm_16k_mono,
     language = "en";
 
   std::vector<uint8_t> wav = openai_common::pcm_float32_to_wav(pcm_16k_mono);
-  const std::string key_tail = openai_common::last4(api_key_);
-  logging::info("[%s] POST /v1/audio/transcriptions, %zu samples, model %s, "
+  const std::string key_tail =
+      api_key_.empty() ? std::string("none") : openai_common::last4(api_key_);
+  logging::info("[%s] POST %s/v1/audio/transcriptions, %zu samples, model %s, "
                 "lang=%s, key sk-...%s",
-                kBackendTag, pcm_16k_mono.size(), model_.c_str(),
-                language.c_str(), key_tail.c_str());
+                kBackendTag, base_url_.c_str(), pcm_16k_mono.size(),
+                model_.c_str(), language.c_str(), key_tail.c_str());
 
   CURL *curl = curl_easy_init();
   if (!curl) {
@@ -97,8 +96,11 @@ std::string OpenAiStt::transcribe(const std::vector<float> &pcm_16k_mono,
   }
 
   const std::string url = base_url_ + "/v1/audio/transcriptions";
-  const std::string auth = "Authorization: Bearer " + api_key_;
-  struct curl_slist *headers = curl_slist_append(nullptr, auth.c_str());
+  struct curl_slist *headers = nullptr;
+  if (!api_key_.empty()) {
+    const std::string auth = "Authorization: Bearer " + api_key_;
+    headers = curl_slist_append(headers, auth.c_str());
+  }
 
   std::string response_body;
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());

@@ -483,15 +483,28 @@ void process_one(const model_manifest::Entry &e) {
 // all_ready().
 void load_openai_backends() {
   std::string api_key = settings::load_api_key();
-  if (api_key.empty()) {
+  std::string base_url = settings::openai_base_url();
+  const bool custom_url = !base_url.empty();
+  if (base_url.empty())
+    base_url = openai_common::kDefaultBaseUrl;
+
+  // A custom base URL (Ollama / LM Studio / self-hosted) may not
+  // require an API key. The OpenAI default endpoint always does.
+  if (api_key.empty() && !custom_url) {
     logging::error("[xp_wellys_atc] OpenAI mode active but no API key in "
                    "Keychain. Open Settings to paste a key.");
     return;
   }
 
-  auto stt = std::make_unique<OpenAiStt>(api_key, settings::openai_stt_model());
-  auto lm = std::make_unique<OpenAiLm>(api_key, settings::openai_lm_model());
-  auto tts = std::make_unique<OpenAiTts>(api_key, settings::openai_tts_model());
+  logging::info("[xp_wellys_atc] OpenAI base URL: %s%s", base_url.c_str(),
+                custom_url ? " (custom)" : " (default)");
+
+  auto stt = std::make_unique<OpenAiStt>(api_key, settings::openai_stt_model(),
+                                         base_url);
+  auto lm = std::make_unique<OpenAiLm>(api_key, settings::openai_lm_model(),
+                                       base_url);
+  auto tts = std::make_unique<OpenAiTts>(api_key, settings::openai_tts_model(),
+                                         base_url);
 
   // Pre-register the three configured OpenAI voices. load_voice() on
   // the cloud TTS only validates the voice id (alloy / echo / fable /
@@ -640,8 +653,16 @@ void run_worker() {
     }
 #endif
     if (mode == "openai") {
-      logging::info("[xp_wellys_atc] BACKEND MODE: OPENAI (api.openai.com). "
-                    "Audio + transcripts will be sent to OpenAI.");
+      const std::string cfg_url = settings::openai_base_url();
+      if (cfg_url.empty()) {
+        logging::info("[xp_wellys_atc] BACKEND MODE: OPENAI (api.openai.com). "
+                      "Audio + transcripts will be sent to OpenAI.");
+      } else {
+        logging::info("[xp_wellys_atc] BACKEND MODE: OPENAI-compatible (%s). "
+                      "Audio + transcripts will be sent to the configured "
+                      "endpoint.",
+                      cfg_url.c_str());
+      }
       load_openai_backends();
     } else if (mode == "mistral") {
       logging::info("[xp_wellys_atc] BACKEND MODE: MISTRAL (api.mistral.ai). "

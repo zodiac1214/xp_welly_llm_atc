@@ -52,17 +52,16 @@ std::string OpenAiLm::respond_constrained(const std::string &system_prompt,
 std::string OpenAiLm::call(const std::string &system_prompt,
                            const std::string &user_text, bool json_mode) {
   last_error_.clear();
-  if (api_key_.empty()) {
-    logging::error("[%s] No API key configured", kBackendTag);
-    last_error_ = std::string(kBackendTag) + ": No API key configured";
-    return {};
-  }
+  // An empty api_key is allowed: OpenAI-compatible servers (e.g.
+  // Ollama, LM Studio) often don't require auth. We just skip the
+  // Authorization header below in that case.
 
-  const std::string key_tail = openai_common::last4(api_key_);
+  const std::string key_tail =
+      api_key_.empty() ? std::string("none") : openai_common::last4(api_key_);
   logging::info(
-      "[%s] POST /v1/chat/completions, model %s, json_mode=%s, key sk-...%s",
-      kBackendTag, model_.c_str(), json_mode ? "true" : "false",
-      key_tail.c_str());
+      "[%s] POST %s/v1/chat/completions, model %s, json_mode=%s, key sk-...%s",
+      kBackendTag, base_url_.c_str(), model_.c_str(),
+      json_mode ? "true" : "false", key_tail.c_str());
 
   nlohmann::json body = {
       {"model", model_},
@@ -84,8 +83,11 @@ std::string OpenAiLm::call(const std::string &system_prompt,
   }
 
   const std::string url = base_url_ + "/v1/chat/completions";
-  const std::string auth = "Authorization: Bearer " + api_key_;
-  struct curl_slist *headers = curl_slist_append(nullptr, auth.c_str());
+  struct curl_slist *headers = nullptr;
+  if (!api_key_.empty()) {
+    const std::string auth = "Authorization: Bearer " + api_key_;
+    headers = curl_slist_append(headers, auth.c_str());
+  }
   headers = curl_slist_append(headers, "Content-Type: application/json");
 
   std::string response_body;

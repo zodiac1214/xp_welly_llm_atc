@@ -122,6 +122,13 @@ std::string openai_stt_model();
 std::string openai_lm_model();
 std::string openai_tts_model();
 
+// OpenAI-compatible server base URL. Empty string => use the default
+// OpenAI endpoint. Setting a value (e.g. "http://localhost:11434" for
+// Ollama, or any other OpenAI-API-compatible server) routes the
+// three cloud clients at that base instead. Trailing slashes stripped
+// by set_openai_base_url().
+std::string openai_base_url();
+
 // OpenAI TTS voice per role. One of
 // alloy / echo / fable / onyx / nova / shimmer.
 std::string openai_tts_voice_atis();
@@ -151,6 +158,7 @@ void set_backend_mode(const std::string &v);
 void set_openai_stt_model(const std::string &v);
 void set_openai_lm_model(const std::string &v);
 void set_openai_tts_model(const std::string &v);
+void set_openai_base_url(const std::string &v);
 void set_openai_tts_voice_atis(const std::string &v);
 void set_openai_tts_voice_tower(const std::string &v);
 void set_openai_tts_voice_ground(const std::string &v);

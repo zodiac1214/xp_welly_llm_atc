@@ -145,6 +145,14 @@ static char api_key_buf[256] = {};
 static float api_key_feedback_timer = 0.0f;
 static char api_key_feedback_msg[128] = {};
 
+// OpenAI-compatible base URL buffer. Empty => default api.openai.com.
+// Initialized from settings on first render so the user sees their
+// existing value.
+static char openai_base_url_buf[256] = {};
+static bool openai_base_url_buf_initialized = false;
+static float openai_base_url_feedback_timer = 0.0f;
+static char openai_base_url_feedback_msg[128] = {};
+
 static char mistral_key_buf[256] = {};
 static float mistral_key_feedback_timer = 0.0f;
 static char mistral_key_feedback_msg[128] = {};
@@ -1375,6 +1383,64 @@ static void draw_settings_tab() {
       ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s",
                          api_key_feedback_msg);
       api_key_feedback_timer -= ImGui::GetIO().DeltaTime;
+    }
+
+    // OpenAI-compatible base URL. Empty => default OpenAI endpoint.
+    // Set this to point at Ollama / LM Studio / any other server that
+    // exposes the OpenAI /v1/* API. When set, the API key may also be
+    // empty (Ollama by default does not require auth).
+    if (!openai_base_url_buf_initialized) {
+      const std::string cur = settings::openai_base_url();
+      std::strncpy(openai_base_url_buf, cur.c_str(),
+                   sizeof(openai_base_url_buf) - 1);
+      openai_base_url_buf[sizeof(openai_base_url_buf) - 1] = '\0';
+      openai_base_url_buf_initialized = true;
+    }
+    ImGui::InputText("Base URL", openai_base_url_buf,
+                     sizeof(openai_base_url_buf));
+    ImGui::TextDisabled("Empty = api.openai.com. Example: "
+                        "http://localhost:11434 (Ollama).");
+    if (ImGui::Button("Paste URL")) {
+      std::string clip = ui::clipboard::read_system_text();
+      if (!clip.empty()) {
+        std::strncpy(openai_base_url_buf, clip.c_str(),
+                     sizeof(openai_base_url_buf) - 1);
+        openai_base_url_buf[sizeof(openai_base_url_buf) - 1] = '\0';
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save URL")) {
+      settings::set_openai_base_url(openai_base_url_buf);
+      settings::save();
+      // Re-read to reflect any trim done by the setter.
+      const std::string saved = settings::openai_base_url();
+      std::strncpy(openai_base_url_buf, saved.c_str(),
+                   sizeof(openai_base_url_buf) - 1);
+      openai_base_url_buf[sizeof(openai_base_url_buf) - 1] = '\0';
+      std::snprintf(openai_base_url_feedback_msg,
+                    sizeof(openai_base_url_feedback_msg), "%s",
+                    saved.empty() ? "Cleared (using api.openai.com)"
+                                  : "Base URL saved");
+      openai_base_url_feedback_timer = 3.0f;
+      backends::loader::stop();
+      backends::loader::start();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset URL")) {
+      std::memset(openai_base_url_buf, 0, sizeof(openai_base_url_buf));
+      settings::set_openai_base_url("");
+      settings::save();
+      std::snprintf(openai_base_url_feedback_msg,
+                    sizeof(openai_base_url_feedback_msg), "%s",
+                    "Reset to default (api.openai.com)");
+      openai_base_url_feedback_timer = 3.0f;
+      backends::loader::stop();
+      backends::loader::start();
+    }
+    if (openai_base_url_feedback_timer > 0.0f) {
+      ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s",
+                         openai_base_url_feedback_msg);
+      openai_base_url_feedback_timer -= ImGui::GetIO().DeltaTime;
     }
 
     // Model + voice combos — driven by data/models_catalog.json so
